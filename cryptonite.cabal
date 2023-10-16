@@ -1,5 +1,5 @@
 Name:                cryptonite
-version:             0.26
+version:             0.29
 Synopsis:            Cryptography Primitives sink
 Description:
     A repository of cryptographic primitives.
@@ -19,7 +19,7 @@ Description:
     * Data related: Anti-Forensic Information Splitter (AFIS)
     .
     If anything cryptographic related is missing from here, submit
-    a pull request to have it added. This package strive to be a
+    a pull request to have it added. This package strives to be a
     cryptographic kitchen sink that provides cryptography for everyone.
     .
     Evaluate the security related to your requirements before using.
@@ -36,7 +36,7 @@ Build-Type:          Simple
 Homepage:            https://github.com/haskell-crypto/cryptonite
 Bug-reports:         https://github.com/haskell-crypto/cryptonite/issues
 Cabal-Version:       1.18
-tested-with:         GHC==8.6.5, GHC==8.4.4, GHC==8.2.2, GHC==8.0.2
+tested-with:         GHC==8.8.2, GHC==8.6.5, GHC==8.4.4, GHC==8.2.2, GHC==8.0.2
 extra-doc-files:     README.md CHANGELOG.md
 extra-source-files:  cbits/*.h
                      cbits/aes/*.h
@@ -50,12 +50,14 @@ extra-source-files:  cbits/*.h
                      cbits/decaf/p448/*.h
                      cbits/decaf/ed448goldilocks/decaf_tables.c
                      cbits/decaf/ed448goldilocks/decaf.c
-                     cbits/p256/*.h
+                     cbits/include32/p256/*.h
+                     cbits/include64/p256/*.h
                      cbits/blake2/ref/*.h
                      cbits/blake2/sse/*.h
                      cbits/argon2/*.h
                      cbits/argon2/*.c
                      cbits/aes/x86ni_impl.c
+                     cbits/cryptonite_hash_prefix.c
                      tests/*.hs
 
 source-repository head
@@ -102,8 +104,14 @@ Flag check_alignment
   Default:           False
   Manual:            True
 
+Flag use_target_attributes
+  Description:       use GCC / clang function attributes instead of global target options.
+  Default:           True
+  Manual:            True
+
 Library
   Exposed-modules:   Crypto.Cipher.AES
+                     Crypto.Cipher.AESGCMSIV
                      Crypto.Cipher.Blowfish
                      Crypto.Cipher.CAST5
                      Crypto.Cipher.Camellia
@@ -158,9 +166,11 @@ Library
                      Crypto.PubKey.ECC.ECDSA
                      Crypto.PubKey.ECC.P256
                      Crypto.PubKey.ECC.Types
+                     Crypto.PubKey.ECDSA
                      Crypto.PubKey.ECIES
                      Crypto.PubKey.Ed25519
                      Crypto.PubKey.Ed448
+                     Crypto.PubKey.EdDSA
                      Crypto.PubKey.RSA
                      Crypto.PubKey.RSA.PKCS15
                      Crypto.PubKey.RSA.Prim
@@ -177,6 +187,7 @@ Library
                      Crypto.Random.Entropy
                      Crypto.Random.EntropyPool
                      Crypto.Random.Entropy.Unsafe
+                     Crypto.System.CPU
                      Crypto.Tutorial
   Other-modules:     Crypto.Cipher.AES.Primitive
                      Crypto.Cipher.Blowfish.Box
@@ -225,6 +236,7 @@ Library
                      Crypto.PubKey.ElGamal
                      Crypto.ECC.Simple.Types
                      Crypto.ECC.Simple.Prim
+                     Crypto.Internal.Builder
                      Crypto.Internal.ByteArray
                      Crypto.Internal.Compat
                      Crypto.Internal.CompatPrim
@@ -282,6 +294,11 @@ Library
                    , cbits/decaf/p448
 
   if arch(x86_64) || arch(aarch64)
+    include-dirs:      cbits/include64
+  else
+    include-dirs:      cbits/include32
+
+  if arch(x86_64) || arch(aarch64)
     C-sources:         cbits/decaf/p448/arch_ref64/f_impl.c
                      , cbits/decaf/p448/f_generic.c
                      , cbits/decaf/p448/f_arithmetic.c
@@ -327,9 +344,13 @@ Library
     c-sources:      cbits/cryptonite_rdrand.c
 
   if flag(support_aesni) && (os(linux) || os(freebsd) || os(osx)) && (arch(i386) || arch(x86_64))
-    CC-options:     -mssse3 -maes -DWITH_AESNI
+    CC-options:     -DWITH_AESNI
+    if !flag(use_target_attributes)
+      CC-options:     -mssse3 -maes
     if flag(support_pclmuldq)
-       CC-options:  -msse4.1 -mpclmul -DWITH_PCLMUL
+      CC-options:   -DWITH_PCLMUL
+      if !flag(use_target_attributes)
+        CC-options:     -msse4.1 -mpclmul
     C-sources:       cbits/aes/x86ni.c
                    , cbits/aes/generic.c
                    , cbits/aes/gf.c
@@ -354,6 +375,8 @@ Library
 
   if arch(x86_64) || flag(support_sse)
     CPP-options:    -DSUPPORT_SSE
+    if arch(i386)
+      CC-options:   -msse2
 
   C-sources:      cbits/argon2/argon2.c
   include-dirs:   cbits/argon2
@@ -374,6 +397,8 @@ Library
     Build-depends:   deepseq
   if flag(check_alignment)
     cc-options:     -DWITH_ASSERT_ALIGNMENT
+  if flag(use_target_attributes)
+    cc-options:     -DWITH_TARGET_ATTRIBUTES
 
 Test-Suite test-cryptonite
   type:              exitcode-stdio-1.0
@@ -385,6 +410,7 @@ Test-Suite test-cryptonite
                      BCryptPBKDF
                      ECC
                      ECC.Edwards25519
+                     ECDSA
                      Hash
                      Imports
                      KAT_AES.KATCBC
@@ -394,6 +420,7 @@ Test-Suite test-cryptonite
                      KAT_AES.KATOCB3
                      KAT_AES.KATXTS
                      KAT_AES
+                     KAT_AESGCMSIV
                      KAT_AFIS
                      KAT_Argon2
                      KAT_Blowfish
@@ -404,6 +431,7 @@ Test-Suite test-cryptonite
                      KAT_DES
                      KAT_Ed25519
                      KAT_Ed448
+                     KAT_EdDSA
                      KAT_CMAC
                      KAT_HKDF
                      KAT_HMAC
