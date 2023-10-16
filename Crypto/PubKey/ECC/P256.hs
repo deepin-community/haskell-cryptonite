@@ -8,7 +8,6 @@
 -- P256 support
 --
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE EmptyDataDecls #-}
 {-# OPTIONS_GHC -fno-warn-unused-binds #-}
 module Crypto.PubKey.ECC.P256
@@ -22,7 +21,9 @@ module Crypto.PubKey.ECC.P256
     , pointDh
     , pointsMulVarTime
     , pointIsValid
+    , pointIsAtInfinity
     , toPoint
+    , pointX
     , pointToIntegers
     , pointFromIntegers
     , pointToBinary
@@ -31,10 +32,13 @@ module Crypto.PubKey.ECC.P256
     -- * Scalar arithmetic
     , scalarGenerate
     , scalarZero
+    , scalarN
     , scalarIsZero
     , scalarAdd
     , scalarSub
+    , scalarMul
     , scalarInv
+    , scalarInvSafe
     , scalarCmp
     , scalarFromBinary
     , scalarToBinary
@@ -76,6 +80,9 @@ data P256Scalar
 data P256Y
 data P256X
 
+order :: Integer
+order = 0xffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551
+
 ------------------------------------------------------------------------
 -- Point methods
 ------------------------------------------------------------------------
@@ -109,7 +116,7 @@ pointAdd a b = withNewPoint $ \dx dy ->
 -- | Negate a point
 pointNegate :: Point -> Point
 pointNegate a = withNewPoint $ \dx dy ->
-    withPoint a $ \ax ay -> do
+    withPoint a $ \ax ay ->
         ccryptonite_p256e_point_negate ax ay dx dy
 
 -- | Multiply a point by a scalar
@@ -117,16 +124,16 @@ pointNegate a = withNewPoint $ \dx dy ->
 -- warning: variable time
 pointMul :: Scalar -> Point -> Point
 pointMul scalar p = withNewPoint $ \dx dy ->
-    withScalar scalar $ \n -> withPoint p $ \px py -> withScalarZero $ \nzero ->
-        ccryptonite_p256_points_mul_vartime nzero n px py dx dy
+    withScalar scalar $ \n -> withPoint p $ \px py ->
+        ccryptonite_p256e_point_mul n px py dx dy
 
 -- | Similar to 'pointMul', serializing the x coordinate as binary.
 -- When scalar is multiple of point order the result is all zero.
 pointDh :: ByteArray binary => Scalar -> Point -> binary
 pointDh scalar p =
     B.unsafeCreate scalarSize $ \dst -> withTempPoint $ \dx dy -> do
-        withScalar scalar $ \n -> withPoint p $ \px py -> withScalarZero $ \nzero ->
-            ccryptonite_p256_points_mul_vartime nzero n px py dx dy
+        withScalar scalar $ \n -> withPoint p $ \px py ->
+            ccryptonite_p256e_point_mul n px py dx dy
         ccryptonite_p256_to_bin (castPtr dx) dst
 
 -- | multiply the point @p with @n2 and add a lifted to curve value @n1
@@ -144,6 +151,19 @@ pointIsValid :: Point -> Bool
 pointIsValid p = unsafeDoIO $ withPoint p $ \px py -> do
     r <- ccryptonite_p256_is_valid_point px py
     return (r /= 0)
+
+-- | Check if a 'Point' is the point at infinity
+pointIsAtInfinity :: Point -> Bool
+pointIsAtInfinity (Point b) = constAllZero b
+
+-- | Return the x coordinate as a 'Scalar' if the point is not at infinity
+pointX :: Point -> Maybe Scalar
+pointX p
+    | pointIsAtInfinity p = Nothing
+    | otherwise           = Just $
+        withNewScalarFreeze $ \d    ->
+        withPoint p         $ \px _ ->
+            ccryptonite_p256_mod ccryptonite_SECP256r1_n (castPtr px) (castPtr d)
 
 -- | Convert a point to (x,y) Integers
 pointToIntegers :: Point -> (Integer, Integer)
@@ -187,12 +207,12 @@ pointFromBinary ba = unsafePointFromBinary ba >>= validatePoint
     validatePoint :: Point -> CryptoFailable Point
     validatePoint p
         | pointIsValid p = CryptoPassed p
-        | otherwise      = CryptoFailed $ CryptoError_PointCoordinatesInvalid
+        | otherwise      = CryptoFailed CryptoError_PointCoordinatesInvalid
 
 -- | Convert from binary to a point, possibly invalid
 unsafePointFromBinary :: ByteArrayAccess ba => ba -> CryptoFailable Point
 unsafePointFromBinary ba
-    | B.length ba /= pointSize = CryptoFailed $ CryptoError_PublicKeySizeInvalid
+    | B.length ba /= pointSize = CryptoFailed CryptoError_PublicKeySizeInvalid
     | otherwise                =
         CryptoPassed $ withNewPoint $ \px py -> B.withByteArray ba $ \src -> do
             ccryptonite_p256_from_bin src                        (castPtr px)
@@ -214,6 +234,10 @@ scalarGenerate = unwrap . scalarFromBinary . witness <$> getRandomBytes 32
 -- | The scalar representing 0
 scalarZero :: Scalar
 scalarZero = withNewScalarFreeze $ \d -> ccryptonite_p256_init d
+
+-- | The scalar representing the curve order
+scalarN :: Scalar
+scalarN = throwCryptoError (scalarFromInteger order)
 
 -- | Check if the scalar is 0
 scalarIsZero :: Scalar -> Bool
@@ -237,6 +261,14 @@ scalarSub a b =
     withNewScalarFreeze $ \d -> withScalar a $ \pa -> withScalar b $ \pb ->
         ccryptonite_p256e_modsub ccryptonite_SECP256r1_n pa pb d
 
+-- | Perform multiplication between two scalars
+--
+-- > a * b
+scalarMul :: Scalar -> Scalar -> Scalar
+scalarMul a b =
+    withNewScalarFreeze $ \d -> withScalar a $ \pa -> withScalar b $ \pb ->
+         ccryptonite_p256_modmul ccryptonite_SECP256r1_n pa 0 pb d
+
 -- | Give the inverse of the scalar
 --
 -- > 1 / a
@@ -246,6 +278,14 @@ scalarInv :: Scalar -> Scalar
 scalarInv a =
     withNewScalarFreeze $ \b -> withScalar a $ \pa ->
         ccryptonite_p256_modinv_vartime ccryptonite_SECP256r1_n pa b
+
+-- | Give the inverse of the scalar using safe exponentiation
+--
+-- > 1 / a
+scalarInvSafe :: Scalar -> Scalar
+scalarInvSafe a =
+    withNewScalarFreeze $ \b -> withScalar a $ \pa ->
+        ccryptonite_p256e_scalar_invert pa b
 
 -- | Compare 2 Scalar
 scalarCmp :: Scalar -> Scalar -> Ordering
@@ -257,7 +297,7 @@ scalarCmp a b = unsafeDoIO $
 -- | convert a scalar from binary
 scalarFromBinary :: ByteArrayAccess ba => ba -> CryptoFailable Scalar
 scalarFromBinary ba
-    | B.length ba /= scalarSize = CryptoFailed $ CryptoError_SecretKeySizeInvalid
+    | B.length ba /= scalarSize = CryptoFailed CryptoError_SecretKeySizeInvalid
     | otherwise                 =
         CryptoPassed $ withNewScalarFreeze $ \p -> B.withByteArray ba $ \b ->
             ccryptonite_p256_from_bin b p
@@ -298,17 +338,8 @@ withNewScalarFreeze f = Scalar $ B.allocAndFreeze scalarSize f
 withTempPoint :: (Ptr P256X -> Ptr P256Y -> IO a) -> IO a
 withTempPoint f = allocTempScrubbed pointSize (\p -> let px = castPtr p in f px (pxToPy px))
 
-withTempScalar :: (Ptr P256Scalar -> IO a) -> IO a
-withTempScalar f = allocTempScrubbed scalarSize (f . castPtr)
-
 withScalar :: Scalar -> (Ptr P256Scalar -> IO a) -> IO a
 withScalar (Scalar d) f = B.withByteArray d f
-
-withScalarZero :: (Ptr P256Scalar -> IO a) -> IO a
-withScalarZero f =
-    withTempScalar $ \d -> do
-        ccryptonite_p256_init d
-        f d
 
 allocTemp :: Int -> (Ptr Word8 -> IO a) -> IO a
 allocTemp n f = ignoreSnd <$> B.allocRet n f
@@ -350,6 +381,8 @@ foreign import ccall "cryptonite_p256_mod"
     ccryptonite_p256_mod :: Ptr P256Scalar -> Ptr P256Scalar -> Ptr P256Scalar -> IO ()
 foreign import ccall "cryptonite_p256_modmul"
     ccryptonite_p256_modmul :: Ptr P256Scalar -> Ptr P256Scalar -> P256Digit -> Ptr P256Scalar -> Ptr P256Scalar -> IO ()
+foreign import ccall "cryptonite_p256e_scalar_invert"
+    ccryptonite_p256e_scalar_invert :: Ptr P256Scalar -> Ptr P256Scalar -> IO ()
 --foreign import ccall "cryptonite_p256_modinv"
 --    ccryptonite_p256_modinv :: Ptr P256Scalar -> Ptr P256Scalar -> Ptr P256Scalar -> IO ()
 foreign import ccall "cryptonite_p256_modinv_vartime"
@@ -369,6 +402,13 @@ foreign import ccall "cryptonite_p256e_point_negate"
     ccryptonite_p256e_point_negate :: Ptr P256X -> Ptr P256Y
                                    -> Ptr P256X -> Ptr P256Y
                                    -> IO ()
+
+-- compute (out_x,out_y) = n * (in_x,in_y)
+foreign import ccall "cryptonite_p256e_point_mul"
+    ccryptonite_p256e_point_mul :: Ptr P256Scalar -- n
+                                -> Ptr P256X -> Ptr P256Y -- in_{x,y}
+                                -> Ptr P256X -> Ptr P256Y -- out_{x,y}
+                                -> IO ()
 
 -- compute (out_x,out,y) = n1 * G + n2 * (in_x,in_y)
 foreign import ccall "cryptonite_p256_points_mul_vartime"

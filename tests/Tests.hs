@@ -3,12 +3,15 @@ module Main where
 
 import Imports
 
+import Crypto.System.CPU
+
 import qualified Number
 import qualified Number.F2m
 import qualified BCrypt
 import qualified BCryptPBKDF
 import qualified ECC
 import qualified ECC.Edwards25519
+import qualified ECDSA
 import qualified Hash
 import qualified Poly1305
 import qualified Salsa
@@ -26,11 +29,13 @@ import qualified KAT_Curve25519
 import qualified KAT_Curve448
 import qualified KAT_Ed25519
 import qualified KAT_Ed448
+import qualified KAT_EdDSA
 import qualified KAT_OTP
 import qualified KAT_PubKey
 import qualified KAT_Scrypt
 -- symmetric cipher --------------------
 import qualified KAT_AES
+import qualified KAT_AESGCMSIV
 import qualified KAT_Blowfish
 import qualified KAT_CAST5
 import qualified KAT_Camellia
@@ -43,7 +48,10 @@ import qualified KAT_AFIS
 import qualified Padding
 
 tests = testGroup "cryptonite"
-    [ Number.tests
+    [ testGroup "runtime"
+        [ testCaseInfo "CPU" (return $ show processorOptions)
+        ]
+    , Number.tests
     , Number.F2m.tests
     , Hash.tests
     , Padding.tests
@@ -60,6 +68,7 @@ tests = testGroup "cryptonite"
     , KAT_Curve448.tests
     , KAT_Ed25519.tests
     , KAT_Ed448.tests
+    , KAT_EdDSA.tests
     , KAT_PubKey.tests
     , KAT_OTP.tests
     , testGroup "KDF"
@@ -72,6 +81,7 @@ tests = testGroup "cryptonite"
         ]
     , testGroup "block-cipher"
         [ KAT_AES.tests
+        , KAT_AESGCMSIV.tests
         , KAT_Blowfish.tests
         , KAT_CAST5.tests
         , KAT_Camellia.tests
@@ -89,6 +99,7 @@ tests = testGroup "cryptonite"
     , KAT_AFIS.tests
     , ECC.tests
     , ECC.Edwards25519.tests
+    , ECDSA.tests
     ]
 
 main = defaultMain tests

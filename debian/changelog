@@ -1,8 +1,9 @@
-haskell-cryptonite (0.26-deepin1) unstable; urgency=medium
+haskell-cryptonite (0.29-1) unstable; urgency=medium
 
-  * Rebuild
+  * New upstream release (Closes: #1015274)
+  * Declare compliance with Debian policy 4.6.1
 
- -- Deepin Packages Builder <packages@deepin.org>  Mon, 14 Nov 2022 17:37:27 +0800
+ -- Ilias Tsitsimpis <iliastsi@debian.org>  Tue, 19 Jul 2022 18:26:21 +0300
 
 haskell-cryptonite (0.26-1) unstable; urgency=medium
 
